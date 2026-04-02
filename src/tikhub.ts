@@ -87,19 +87,24 @@ export class TikHubClient {
   }
 
   // v1 接口：kol_video_performance_v1（更稳定的备用接口）
+  // 响应结构：res.data.data.latest_star_item_info（双层 data）
   private async getVideoListV1(kolId: string): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_video_performance_v1', {
       kolId,
       onlyAssign: true,
     });
-    const list = res.data?.list ?? res.data ?? [];
-    if (!Array.isArray(list)) return [];
+    // v1 接口嵌套结构：TikHub 外层 data -> 星图原始 data
+    const innerData = res.data?.data ?? res.data ?? {};
+    const starItems = innerData.latest_star_item_info;
 
     const result: { video: any; videoType: string }[] = [];
     const seen = new Set<string>();
-    for (const v of list) {
-      const id = String(v.item_id ?? v.aweme_id ?? v.video_id ?? '');
-      if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
+
+    if (Array.isArray(starItems)) {
+      for (const v of starItems) {
+        const id = String(v.item_id ?? '');
+        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
+      }
     }
     return result;
   }
