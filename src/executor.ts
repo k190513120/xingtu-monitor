@@ -37,12 +37,12 @@ async function processSingleBlogger(
   // 如果博主表已有星图ID，直接复用，省一次 API 调用
   const kolId = existingKolId || await tikhub.getKolId(secUserId);
 
-  // 并发获取：名片 + 视频列表 + 报价
+  // 并发获取：名片 + 视频列表 + 报价（均容错，不影响其他步骤）
   const [bloggerInfo, videoItems, priceList] = await Promise.all([
     tikhub.getAuthorBusinessCard(kolId).catch(() => ({
       nickName: '', avatarUri: '', wechat: '', mcnName: '', mcnLogo: '',
     })),
-    tikhub.getVideoList(kolId),
+    tikhub.getVideoList(kolId).catch(() => [] as { video: any; videoType: string }[]),
     tikhub.getPriceList(kolId).catch(() => [] as any[]),
   ]);
 
@@ -168,7 +168,11 @@ export async function executeTask(config: TaskConfig, kv: KVNamespace): Promise<
             }
           }
 
-          // 收集视频数据
+          // 收集视频数据（视频列表可能为空——接口失败时返回空数组）
+          if (videos.length === 0) {
+            // 名片写回成功但视频获取失败，不算完全失败
+            if (allErrors.length < 5) allErrors.push(`[${entry.profileUrl.slice(-20)}] 视频列表获取失败(API 400)，名片信息已写回`);
+          }
           for (const video of videos) {
             allVideoFields.push(videoRecordToFields(video));
           }
