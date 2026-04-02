@@ -49,8 +49,19 @@ export class TikHubClient {
     return String(kolId);
   }
 
-  // 步骤2：根据 KOL ID 获取视频列表（星图 + 普通都返回，带类型标记）
+  // 步骤2：根据 KOL ID 获取星图视频列表
+  // 优先用 v2 接口，失败时回退到 v1 稳定接口
   async getVideoList(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
+    try {
+      return await this.getVideoListV2(kolId, limit);
+    } catch (e) {
+      console.log(`[tikhub] v2 视频接口失败，回退到 v1: ${(e as any)?.message}`);
+      return await this.getVideoListV1(kolId);
+    }
+  }
+
+  // v2 接口：get_author_show_items（不稳定，经常 400）
+  private async getVideoListV2(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_show_items', {
       o_author_id: kolId,
       limit,
@@ -65,19 +76,30 @@ export class TikHubClient {
     const result: { video: any; videoType: string }[] = [];
     const seen = new Set<string>();
 
-    // 星图视频
+    // 只取星图视频
     if (Array.isArray(data.latest_star_item_info)) {
       for (const v of data.latest_star_item_info) {
         const id = String(v.item_id ?? '');
         if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
       }
     }
-    // 普通视频
-    if (Array.isArray(data.latest_item_info)) {
-      for (const v of data.latest_item_info) {
-        const id = String(v.item_id ?? '');
-        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '普通视频' }); }
-      }
+    return result;
+  }
+
+  // v1 接口：kol_video_performance_v1（更稳定的备用接口）
+  private async getVideoListV1(kolId: string): Promise<{ video: any; videoType: string }[]> {
+    const res = await this.get('/api/v1/douyin/xingtu/kol_video_performance_v1', {
+      kolId,
+      onlyAssign: true,
+    });
+    const list = res.data?.list ?? res.data ?? [];
+    if (!Array.isArray(list)) return [];
+
+    const result: { video: any; videoType: string }[] = [];
+    const seen = new Set<string>();
+    for (const v of list) {
+      const id = String(v.item_id ?? v.aweme_id ?? v.video_id ?? '');
+      if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
     }
     return result;
   }
