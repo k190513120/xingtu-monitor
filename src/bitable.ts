@@ -186,18 +186,29 @@ export async function updateRecord(
   );
 }
 
-// 从飞书记录中提取字段值（兼容 URL 字段、文本字段）
+// 从飞书记录中提取字段值（兼容 URL 字段、文本字段、富文本数组）
 export function extractFieldValue(fieldValue: unknown): string {
   if (!fieldValue) return '';
   if (typeof fieldValue === 'string') return fieldValue;
-  // URL 字段格式：[{link: "...", text: "..."}]
   if (Array.isArray(fieldValue)) {
+    // 富文本数组：[{type:"text",text:"aaa"},{type:"url",link:"bbb"}]
+    // 或 URL 字段：[{link:"...",text:"..."}]
+    // 拼接所有文本片段，取出完整的 URL
+    const parts: string[] = [];
+    for (const item of fieldValue) {
+      if (typeof item === 'string') { parts.push(item); continue; }
+      if (item?.link) { parts.push(String(item.link)); continue; }
+      if (item?.text) { parts.push(String(item.text)); continue; }
+      if (item?.value) { parts.push(String(item.value)); continue; }
+    }
+    const joined = parts.join('');
+    // 如果拼接结果包含 URL，直接返回
+    if (joined) return joined;
+    // fallback: 取第一个元素
     const first = fieldValue[0];
     if (!first) return '';
-    if (typeof first === 'string') return first;
     return String(first.link ?? first.text ?? first.value ?? '');
   }
-  // 对象格式
   if (typeof fieldValue === 'object') {
     const obj = fieldValue as any;
     return String(obj.link ?? obj.text ?? obj.value ?? '');
