@@ -117,10 +117,12 @@ export default {
       try {
         steps.secUserId = tikhub.extractSecUserId(testUrl);
         steps.kolId = await tikhub.getKolId(steps.secUserId);
-        const [videoItems, priceList] = await Promise.all([
+        const [videoItems, priceList, businessCard] = await Promise.all([
           tikhub.getVideoList(steps.kolId),
           tikhub.getPriceList(steps.kolId).catch((e: any) => ({ error: e?.message })),
+          tikhub.getAuthorBusinessCard(steps.kolId).catch((e: any) => ({ error: e?.message })),
         ]);
+        steps.businessCard = businessCard;
         steps.videoCount = Array.isArray(videoItems) ? videoItems.length : 0;
         steps.starCount = Array.isArray(videoItems) ? videoItems.filter((i: any) => i.videoType === '星图视频').length : 0;
         steps.regularCount = Array.isArray(videoItems) ? videoItems.filter((i: any) => i.videoType === '普通视频').length : 0;
@@ -136,11 +138,10 @@ export default {
             play: sample.video?.play,
           };
         }
-        // Test full processBlogger
-        const records = await tikhub.processBlogger(testUrl);
-        steps.totalRecords = records.length;
-        if (records.length > 0) {
-          steps.sampleRecord = records[0];
+        // 价格匹配测试（用第一条视频的时长）
+        if (Array.isArray(videoItems) && videoItems.length > 0 && Array.isArray(priceList)) {
+          const duration = Number(videoItems[0].video?.duration ?? 0);
+          steps.samplePriceMatch = tikhub.matchPrice(priceList, duration);
         }
       } catch (e: any) {
         steps.error = e?.message;

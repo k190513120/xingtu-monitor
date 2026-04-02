@@ -116,10 +116,13 @@ export class TikHubClient {
       kolId,
       platformChannel: '_1', // _1=抖音视频
     });
-    return res.data?.price_info ?? [];
+    // 兼容双层嵌套：res.data.data.price_info 或 res.data.price_info
+    const innerData = res.data?.data ?? res.data ?? {};
+    return innerData.price_info ?? res.data?.price_info ?? [];
   }
 
   // 步骤4：获取博主名片信息（名称、头像、微信、MCN等）
+  // 优先 v2 business_card_info，失败回退 v1 kol_base_info
   async getAuthorBusinessCard(kolId: string): Promise<{
     nickName: string;
     avatarUri: string;
@@ -127,16 +130,50 @@ export class TikHubClient {
     mcnName: string;
     mcnLogo: string;
   }> {
+    try {
+      return await this.getAuthorBusinessCardV2(kolId);
+    } catch (e) {
+      console.log(`[tikhub] v2 名片接口失败，回退到 v1: ${(e as any)?.message}`);
+      return await this.getAuthorBaseInfoV1(kolId);
+    }
+  }
+
+  // v2 名片接口（不稳定）
+  private async getAuthorBusinessCardV2(kolId: string): Promise<{
+    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
+  }> {
     const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_business_card_info', {
       o_author_id: kolId,
     });
-    const card = res.data?.card_info ?? {};
+    const innerData = res.data?.data ?? res.data ?? {};
+    const card = innerData.card_info ?? innerData;
     return {
       nickName: String(card.nick_name ?? ''),
       avatarUri: String(card.avatar_uri ?? ''),
       wechat: String(card.wechat ?? ''),
-      mcnName: String(card.mcn_info?.mcn_name ?? ''),
-      mcnLogo: String(card.mcn_info?.mcn_logo ?? ''),
+      mcnName: String(card.mcn_info?.mcn_name ?? card.mcn_name ?? ''),
+      mcnLogo: String(card.mcn_info?.mcn_logo ?? card.mcn_logo ?? ''),
+    };
+  }
+
+  // v1 名片接口（稳定）— kol_base_info_v1
+  private async getAuthorBaseInfoV1(kolId: string): Promise<{
+    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
+  }> {
+    const res = await this.get('/api/v1/douyin/xingtu/kol_base_info_v1', {
+      kolId,
+      platformChannel: '_1',
+    });
+    const info = res.data?.data ?? res.data ?? {};
+    // v1 没有独立 wechat 字段，尝试从 mcn_introduction 提取
+    const mcnIntro = String(info.mcn_introduction ?? '');
+    const wxMatch = mcnIntro.match(/(?:VX|vx|微信|wx|WeChat)\s*[:：]?\s*(\S+)/i);
+    return {
+      nickName: String(info.nick_name ?? ''),
+      avatarUri: String(info.avatar_uri ?? ''),
+      wechat: wxMatch ? wxMatch[1] : '',
+      mcnName: String(info.mcn_name ?? ''),
+      mcnLogo: String(info.mcn_logo ?? ''),
     };
   }
 
