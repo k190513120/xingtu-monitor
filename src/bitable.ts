@@ -17,11 +17,24 @@ async function request(
     body: body !== undefined ? JSON.stringify(body) : undefined,
   });
 
-  const json = await res.json() as any;
+  const text = await res.text();
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    throw new Error(`飞书API返回非JSON ${res.status} [${method} ${path}]: ${text.slice(0, 300)}`);
+  }
 
   if (!res.ok || json.code !== 0) {
+    // 飞书常见错误码说明
+    const hints: Record<number, string> = {
+      1254043: '请检查 PersonalBaseToken 是否正确',
+      1254045: '无权限，请确认 Token 对该多维表格有编辑权限',
+      1254607: 'AppToken 无效，请检查是否正确',
+    };
+    const hint = hints[json.code] ? ` (${hints[json.code]})` : '';
     throw new Error(
-      `飞书API错误 ${res.status} [${method} ${path}]: code=${json.code} msg=${json.msg}`,
+      `飞书API错误 HTTP${res.status} code=${json.code} msg=${json.msg}${hint}`,
     );
   }
   return json;
