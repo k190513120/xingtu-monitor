@@ -1,6 +1,6 @@
 import { bitable } from '@lark-base-open/js-sdk';
 
-const API = '';
+const API = 'https://xingtu.xiaomiao.win';
 
 // ─── 通用消息提示（替代 alert，Feishu iframe 中 alert 被屏蔽）─────────────────
 function showMsg(id: string, text: string, ok = true) {
