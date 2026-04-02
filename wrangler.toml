@@ -1,0 +1,24 @@
+name = "xingtu-monitor"
+main = "src/index.ts"
+compatibility_date = "2024-09-23"
+
+routes = [
+  { pattern = "xingtu.xiaomiao.win", custom_domain = true, zone_id = "81498ac216563761c63636b270a4caf1" }
+]
+
+# 定时任务：每天早上9点执行
+[triggers]
+crons = ["0 1 * * *"]  # UTC 1:00 = 北京时间 9:00
+
+# 静态资源：Vite 构建产物（dist/）
+# not_found_handling = "none" 让未匹配到静态文件的请求（如 /api/*）交给 Worker 处理
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+not_found_handling = "none"
+
+# KV 命名空间
+[[kv_namespaces]]
+binding = "TASK_STORE"
+id = "ff2e1ec95ca34515bc2b7ec0c6374800"
+preview_id = "170595846f3e4018b2b8f13f6997fb23"

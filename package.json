@@ -1,0 +1,21 @@
+{
+  "name": "xingtu-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "vite",
+    "dev:worker": "wrangler dev",
+    "build": "vite build",
+    "deploy": "vite build && wrangler deploy",
+    "kv:create": "wrangler kv:namespace create TASK_STORE && wrangler kv:namespace create TASK_STORE --preview"
+  },
+  "devDependencies": {
+    "@cloudflare/workers-types": "^4.20241112.0",
+    "typescript": "^5.5.2",
+    "vite": "^5.0.0",
+    "wrangler": "^4.76.0"
+  },
+  "dependencies": {
+    "@lark-base-open/js-sdk": "^1.0.2"
+  }
+}

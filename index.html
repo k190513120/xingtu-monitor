@@ -1,0 +1,221 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>星图竞品监控</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, 'PingFang SC', sans-serif;
+      font-size: 13px;
+      background: #fff;
+      color: #1f2329;
+      padding: 12px;
+    }
+    h2 { font-size: 15px; font-weight: 600; margin-bottom: 12px; }
+    .section {
+      border: 1px solid #e5e6eb;
+      border-radius: 6px;
+      padding: 12px;
+      margin-bottom: 10px;
+    }
+    .section-title {
+      font-size: 12px;
+      font-weight: 600;
+      color: #646a73;
+      margin-bottom: 8px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .field { margin-bottom: 8px; }
+    label { display: block; font-size: 12px; color: #646a73; margin-bottom: 3px; }
+    input, select {
+      width: 100%;
+      padding: 6px 8px;
+      border: 1px solid #dde0e6;
+      border-radius: 4px;
+      font-size: 12px;
+      color: #1f2329;
+      background: #fff;
+      outline: none;
+    }
+    input:focus, select:focus { border-color: #3370ff; }
+    input[type="password"] { letter-spacing: 2px; }
+    .row { display: flex; gap: 8px; }
+    .row .field { flex: 1; }
+    .btn {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      padding: 7px 14px;
+      border-radius: 5px;
+      font-size: 13px;
+      font-weight: 500;
+      cursor: pointer;
+      border: none;
+      transition: opacity 0.15s;
+    }
+    .btn:disabled { opacity: 0.5; cursor: not-allowed; }
+    .btn-primary { background: #3370ff; color: #fff; }
+    .btn-primary:hover:not(:disabled) { background: #2860e6; }
+    .btn-default { background: #f0f1f5; color: #1f2329; }
+    .btn-default:hover:not(:disabled) { background: #e5e6eb; }
+    .btn-success { background: #27c346; color: #fff; }
+    .btn-success:hover:not(:disabled) { background: #20aa3c; }
+    .btn-row { display: flex; gap: 8px; margin-top: 4px; }
+    .status-box {
+      background: #f6f7f9;
+      border-radius: 5px;
+      padding: 10px 12px;
+      font-size: 12px;
+      line-height: 1.6;
+      min-height: 60px;
+    }
+    .progress {
+      background: #e5e6eb;
+      border-radius: 3px;
+      height: 5px;
+      margin-top: 8px;
+      overflow: hidden;
+    }
+    .progress-bar {
+      height: 100%;
+      background: #3370ff;
+      border-radius: 3px;
+      transition: width 0.4s;
+    }
+    .state-running { color: #3370ff; }
+    .state-done { color: #27c346; }
+    .state-error { color: #f54a45; }
+    .hint { font-size: 11px; color: #8f959e; margin-top: 2px; }
+    .tabs { display: flex; border-bottom: 1px solid #e5e6eb; margin-bottom: 12px; }
+    .tab {
+      padding: 7px 14px;
+      font-size: 13px;
+      color: #646a73;
+      cursor: pointer;
+      border-bottom: 2px solid transparent;
+      margin-bottom: -1px;
+    }
+    .tab.active { color: #3370ff; border-bottom-color: #3370ff; font-weight: 500; }
+    .tab-content { display: none; }
+    .tab-content.active { display: block; }
+    .same-base-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+    .same-base-row input[type=checkbox] { width: auto; }
+    .same-base-row label { margin: 0; color: #1f2329; font-size: 12px; }
+  </style>
+</head>
+<body>
+  <h2>⭐ 星图竞品监控</h2>
+
+  <div class="tabs">
+    <div class="tab active" id="tab-btn-config" onclick="switchTab('config')">配置</div>
+    <div class="tab" id="tab-btn-run" onclick="switchTab('run')">执行</div>
+  </div>
+
+  <!-- 配置 Tab -->
+  <div id="tab-config" class="tab-content active">
+
+    <div class="section">
+      <div class="section-title">博主表（数据源）</div>
+      <div class="field">
+        <label>多维表格 AppToken <span style="color:#f54a45">*</span></label>
+        <input id="sourceAppToken" placeholder="从飞书 URL 中复制：.../base/这里的字符串" />
+        <div class="hint">打开多维表格，复制浏览器地址栏 /base/ 后面的字符串粘贴到此处</div>
+      </div>
+      <div class="field">
+        <label>选择博主表 <span style="color:#f54a45">*</span></label>
+        <select id="sourceTableId" onchange="onSourceTableChange()">
+          <option value="">加载中...</option>
+        </select>
+      </div>
+      <div class="field">
+        <label>主页链接字段 <span style="color:#f54a45">*</span></label>
+        <select id="profileUrlFieldName">
+          <option value="">选择博主表后自动加载</option>
+        </select>
+        <div class="hint">存放抖音主页链接（https://www.douyin.com/user/xxx）的字段</div>
+      </div>
+      <div class="field">
+        <label>PersonalBaseToken <span style="color:#f54a45">*</span></label>
+        <input id="sourceToken" type="password" placeholder="多维表格右上角 ··· → API → 生成授权码" />
+        <div class="hint">后端定时任务执行时需要</div>
+      </div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">视频数据表（写入目标）</div>
+      <div class="same-base-row">
+        <input type="checkbox" id="sameBase" onchange="onSameBaseChange()" checked />
+        <label for="sameBase">与博主表在同一个多维表格（Token 相同，无需重复填写）</label>
+      </div>
+      <div id="targetTokenFields" style="display:none">
+        <div class="field">
+          <label>目标多维表格 AppToken <span style="color:#f54a45">*</span></label>
+          <input id="targetAppToken" placeholder="URL 中 /base/ 后面的字符串" />
+        </div>
+        <div class="field">
+          <label>PersonalBaseToken <span style="color:#f54a45">*</span></label>
+          <input id="targetToken" type="password" placeholder="目标多维表格右上角 ··· → API → 生成授权码" />
+        </div>
+      </div>
+      <div class="field">
+        <label>目标表 <span style="color:#f54a45">*</span></label>
+        <div class="row">
+          <div class="field">
+            <select id="targetTableId">
+              <option value="">勾选"同一多维表格"后自动加载</option>
+            </select>
+          </div>
+          <button class="btn btn-default" onclick="loadTargetTables()" style="width:70px;flex-shrink:0">加载</button>
+        </div>
+      </div>
+      <button class="btn btn-default" id="initBtn" onclick="initTargetTable()" style="width:100%;margin-top:2px">
+        ✨ 一键创建「星图视频数据」表（含所有字段）
+      </button>
+      <div id="initMsg" class="hint" style="text-align:center;margin-top:4px"></div>
+    </div>
+
+    <div class="section">
+      <div class="section-title">TikHub 配置</div>
+      <div class="field">
+        <label>TikHub API Key <span style="color:#f54a45">*</span></label>
+        <input id="tikHubApiKey" type="password" placeholder="从 TikHub 控制台获取" />
+      </div>
+    </div>
+
+    <div class="btn-row">
+      <button class="btn btn-primary" onclick="saveConfig()" style="flex:1">保存配置</button>
+    </div>
+    <div id="saveMsg" class="hint" style="text-align:center;margin-top:6px"></div>
+  </div>
+
+  <!-- 执行 Tab -->
+  <div id="tab-run" class="tab-content">
+    <div class="section">
+      <div class="section-title">执行状态</div>
+      <div class="status-box" id="statusBox">
+        <span class="hint">点击「立即执行」开始抓取数据</span>
+      </div>
+      <div class="progress" id="progressWrap" style="display:none">
+        <div class="progress-bar" id="progressBar" style="width:0%"></div>
+      </div>
+    </div>
+    <div class="btn-row">
+      <button class="btn btn-success" id="runBtn" onclick="runNow()" style="flex:1">▶ 立即执行</button>
+    </div>
+    <div id="runMsg" class="hint" style="text-align:center;margin-top:6px"></div>
+    <div class="section" style="margin-top:10px">
+      <div class="section-title">定时任务</div>
+      <div class="hint" style="line-height:1.8">
+        每天 <strong>北京时间 09:00</strong> 自动执行（UTC 01:00）。<br/>
+        修改时间：编辑 <code>wrangler.toml</code> 的 <code>crons</code> 后重新 deploy。<br/>
+        每次执行<strong>追加</strong>写入，不删除历史数据。
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="/src/frontend.ts"></script>
+</body>
+</html>

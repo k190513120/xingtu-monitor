@@ -1,0 +1,132 @@
+import { VideoRecord } from './types';
+
+const BASE_URL = 'https://api.tikhub.io';
+
+export class TikHubClient {
+  constructor(private apiKey: string) {}
+
+  private async get(path: string, params: Record<string, string | number | boolean>, retries = 2): Promise<any> {
+    const url = new URL(`${BASE_URL}${path}`);
+    for (const [k, v] of Object.entries(params)) {
+      url.searchParams.set(k, String(v));
+    }
+    let lastError = '';
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+      const res = await fetch(url.toString(), {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+      });
+      const text = await res.text();
+      if (res.ok) {
+        // 用正则把超长数字转成字符串，避免 JS 精度丢失（如 kolId 19位）
+        const safeJson = text.replace(/:\s*(\d{16,})/g, ': "$1"');
+        return JSON.parse(safeJson);
+      }
+      lastError = `TikHub ${res.status} [${path}]: ${text.slice(0, 200)}`;
+      // 400 可能是临时性的（TikHub 上游不稳定），重试
+      if (res.status >= 500 || res.status === 400) continue;
+      break; // 其他错误不重试
+    }
+    throw new Error(lastError);
+  }
+
+  // 从抖音主页链接提取 sec_user_id
+  // 链接格式：https://www.douyin.com/user/MS4wLjABAAAA...
+  extractSecUserId(profileUrl: string): string {
+    const match = profileUrl.trim().match(/\/user\/([^/?#\s]+)/);
+    if (!match) throw new Error(`无法从主页链接提取 sec_user_id: ${profileUrl}`);
+    return match[1];
+  }
+
+  // 步骤1：根据 sec_user_id 获取星图 KOL ID
+  async getKolId(secUserId: string): Promise<string> {
+    const res = await this.get('/api/v1/douyin/xingtu/get_xingtu_kolid_by_sec_user_id', {
+      sec_user_id: secUserId,
+    });
+    // res.data 是一个对象，kol ID 在 data.id 字段
+    const kolId = res.data?.id;
+    if (!kolId) throw new Error(`未找到星图ID，sec_user_id: ${secUserId}`);
+    return String(kolId);
+  }
+
+  // 步骤2：根据 KOL ID 获取视频列表（星图 + 普通都返回，带类型标记）
+  async getVideoList(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
+    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_show_items', {
+      o_author_id: kolId,
+      limit,
+      platform_source: 1,
+      platform_channel: 1,
+      only_assign: false,
+      flow_type: 0,
+    });
+    const data = res.data;
+    if (!data) return [];
+
+    const result: { video: any; videoType: string }[] = [];
+    const seen = new Set<string>();
+
+    // 星图视频
+    if (Array.isArray(data.latest_star_item_info)) {
+      for (const v of data.latest_star_item_info) {
+        const id = String(v.item_id ?? '');
+        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
+      }
+    }
+    // 普通视频
+    if (Array.isArray(data.latest_item_info)) {
+      for (const v of data.latest_item_info) {
+        const id = String(v.item_id ?? '');
+        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '普通视频' }); }
+      }
+    }
+    return result;
+  }
+
+  // 步骤3：获取报价列表（按视频时长分档）
+  // video_type 1=1-20s, 2=21-60s, 71=60s以上
+  async getPriceList(kolId: string): Promise<any[]> {
+    const res = await this.get('/api/v1/douyin/xingtu/kol_service_price_v1', {
+      kolId,
+      platformChannel: '_1', // _1=抖音视频
+    });
+    return res.data?.price_info ?? [];
+  }
+
+  // 步骤4：获取博主名片信息（名称、头像、微信、MCN等）
+  async getAuthorBusinessCard(kolId: string): Promise<{
+    nickName: string;
+    avatarUri: string;
+    wechat: string;
+    mcnName: string;
+    mcnLogo: string;
+  }> {
+    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_business_card_info', {
+      o_author_id: kolId,
+    });
+    const card = res.data?.card_info ?? {};
+    return {
+      nickName: String(card.nick_name ?? ''),
+      avatarUri: String(card.avatar_uri ?? ''),
+      wechat: String(card.wechat ?? ''),
+      mcnName: String(card.mcn_info?.mcn_name ?? ''),
+      mcnLogo: String(card.mcn_info?.mcn_logo ?? ''),
+    };
+  }
+
+  // 根据视频时长（秒）匹配报价
+  matchPrice(priceList: any[], durationSec: number): number {
+    // video_type: 1=1-20s, 2=21-60s, 71=60s以上
+    let targetType = 1; // 默认 1-20s
+    if (durationSec > 60) targetType = 71;
+    else if (durationSec > 20) targetType = 2;
+
+    const matched = priceList.find((p: any) => p.video_type === targetType);
+    if (matched) return Number(matched.price) || 0;
+
+    // fallback: 取第一个固定价格的报价
+    const fallback = priceList.find((p: any) => p.settlement_type === 2 && p.task_category === 1);
+    return fallback ? Number(fallback.price) || 0 : 0;
+  }
+
+  // processBlogger 已移至 executor.ts 中的 processSingleBlogger
+}
