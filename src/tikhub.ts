@@ -49,46 +49,8 @@ export class TikHubClient {
     return String(kolId);
   }
 
-  // 步骤2：根据 KOL ID 获取星图视频列表
-  // 优先用 v2 接口，失败时回退到 v1 稳定接口
-  async getVideoList(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
-    try {
-      return await this.getVideoListV2(kolId, limit);
-    } catch (e) {
-      console.log(`[tikhub] v2 视频接口失败，回退到 v1: ${(e as any)?.message}`);
-      return await this.getVideoListV1(kolId);
-    }
-  }
-
-  // v2 接口：get_author_show_items（不稳定，经常 400）
-  private async getVideoListV2(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
-    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_show_items', {
-      o_author_id: kolId,
-      limit,
-      platform_source: 1,
-      platform_channel: 1,
-      only_assign: false,
-      flow_type: 0,
-    });
-    const data = res.data;
-    if (!data) return [];
-
-    const result: { video: any; videoType: string }[] = [];
-    const seen = new Set<string>();
-
-    // 只取星图视频
-    if (Array.isArray(data.latest_star_item_info)) {
-      for (const v of data.latest_star_item_info) {
-        const id = String(v.item_id ?? '');
-        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
-      }
-    }
-    return result;
-  }
-
-  // v1 接口：kol_video_performance_v1（更稳定的备用接口）
-  // 响应结构：res.data.data.latest_star_item_info（双层 data）
-  private async getVideoListV1(kolId: string): Promise<{ video: any; videoType: string }[]> {
+  // 步骤2：获取星图视频列表（直接用稳定的 v1 接口）
+  async getVideoList(kolId: string): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_video_performance_v1', {
       kolId,
       onlyAssign: true,
@@ -121,44 +83,13 @@ export class TikHubClient {
     return innerData.price_info ?? res.data?.price_info ?? [];
   }
 
-  // 步骤4：获取博主名片信息（名称、头像、微信、MCN等）
-  // 优先 v2 business_card_info，失败回退 v1 kol_base_info
+  // 步骤4：获取博主名片信息（直接用稳定的 v1 接口）
   async getAuthorBusinessCard(kolId: string): Promise<{
     nickName: string;
     avatarUri: string;
     wechat: string;
     mcnName: string;
     mcnLogo: string;
-  }> {
-    try {
-      return await this.getAuthorBusinessCardV2(kolId);
-    } catch (e) {
-      console.log(`[tikhub] v2 名片接口失败，回退到 v1: ${(e as any)?.message}`);
-      return await this.getAuthorBaseInfoV1(kolId);
-    }
-  }
-
-  // v2 名片接口（不稳定）
-  private async getAuthorBusinessCardV2(kolId: string): Promise<{
-    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
-  }> {
-    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_business_card_info', {
-      o_author_id: kolId,
-    });
-    const innerData = res.data?.data ?? res.data ?? {};
-    const card = innerData.card_info ?? innerData;
-    return {
-      nickName: String(card.nick_name ?? ''),
-      avatarUri: String(card.avatar_uri ?? ''),
-      wechat: String(card.wechat ?? ''),
-      mcnName: String(card.mcn_info?.mcn_name ?? card.mcn_name ?? ''),
-      mcnLogo: String(card.mcn_info?.mcn_logo ?? card.mcn_logo ?? ''),
-    };
-  }
-
-  // v1 名片接口（稳定）— kol_base_info_v1
-  private async getAuthorBaseInfoV1(kolId: string): Promise<{
-    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
   }> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_base_info_v1', {
       kolId,
@@ -191,6 +122,4 @@ export class TikHubClient {
     const fallback = priceList.find((p: any) => p.settlement_type === 2 && p.task_category === 1);
     return fallback ? Number(fallback.price) || 0 : 0;
   }
-
-  // processBlogger 已移至 executor.ts 中的 processSingleBlogger
 }

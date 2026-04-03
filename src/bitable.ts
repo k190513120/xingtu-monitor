@@ -85,6 +85,25 @@ export async function batchCreateRecords(
   }
 }
 
+// 批量更新记录，每批最多 500 条
+export async function batchUpdateRecords(
+  appToken: string,
+  token: string,
+  tableId: string,
+  records: { record_id: string; fields: Record<string, any> }[],
+): Promise<void> {
+  const BATCH_SIZE = 500;
+  for (let i = 0; i < records.length; i += BATCH_SIZE) {
+    const chunk = records.slice(i, i + BATCH_SIZE);
+    await request(
+      'POST',
+      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/batch_update`,
+      token,
+      { records: chunk },
+    );
+  }
+}
+
 // 获取数据表字段列表（前端选择字段名时用）
 export async function getTableFields(
   appToken: string,
