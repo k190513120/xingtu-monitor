@@ -55,7 +55,7 @@ export default {
       if (!config) {
         return json({ success: false, error: '请先保存配置' }, 400);
       }
-      ctx.waitUntil(executeTask(config, env.TASK_STORE));
+      ctx.waitUntil(executeTask(config, env.TASK_STORE, 'manual'));
       return json({ success: true, message: '任务已启动，请在「执行」页查看进度' });
     }
 
@@ -161,6 +161,6 @@ export default {
       return;
     }
     console.log('[cron] 定时任务开始执行');
-    ctx.waitUntil(executeTask(config, env.TASK_STORE));
+    ctx.waitUntil(executeTask(config, env.TASK_STORE, 'cron'));
   },
 };

@@ -29,6 +29,32 @@ const SOURCE_TABLE_EXTRA_FIELDS = [
   { field_name: 'MCN机构Logo', type: 1 },
 ];
 
+// 飞书机器人 webhook（用于推送执行结果通知）
+const FEISHU_WEBHOOK = 'https://open.feishu.cn/open-apis/bot/v2/hook/5a155056-2f75-4bfe-8144-89360a1018d3';
+
+// 发送飞书 webhook 通知（失败不影响主流程）
+async function sendFeishuNotification(title: string, content: string): Promise<void> {
+  try {
+    await fetch(FEISHU_WEBHOOK, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        msg_type: 'post',
+        content: {
+          post: {
+            zh_cn: {
+              title,
+              content: [[{ tag: 'text', text: content }]],
+            },
+          },
+        },
+      }),
+    });
+  } catch (e: any) {
+    console.error('[executor] 飞书通知发送失败:', e?.message);
+  }
+}
+
 // ── 防重入锁 ──────────────────────────────────────────────────────────────
 async function acquireLock(kv: KVNamespace): Promise<boolean> {
   const existing = await kv.get('task_lock');
@@ -116,7 +142,11 @@ async function processSingleBlogger(
 }
 
 // ── 主执行逻辑 ────────────────────────────────────────────────────────────
-export async function executeTask(config: TaskConfig, kv: KVNamespace): Promise<void> {
+export async function executeTask(
+  config: TaskConfig,
+  kv: KVNamespace,
+  source: 'cron' | 'manual' = 'manual',
+): Promise<void> {
   // 防重入
   const locked = await acquireLock(kv);
   if (!locked) {
@@ -363,12 +393,42 @@ export async function executeTask(config: TaskConfig, kv: KVNamespace): Promise<
       videoCount: allToCreate.length + allToUpdate.length,
       lastRunAt: startTime,
     });
+
+    // 发送飞书通知（成功）
+    const durationSec = Math.round((Date.now() - startTime) / 1000);
+    const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
+    const statusEmoji = errorCount > 0 ? '⚠️' : '✅';
+    const summaryLines = [
+      `触发方式：${triggerLabel}`,
+      `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+      `执行耗时：${durationSec} 秒`,
+      `处理博主：${processed}/${bloggerEntries.length} 个`,
+      `失败博主：${errorCount} 个`,
+      `视频新增：${allToCreate.length} 条`,
+      `视频更新：${allToUpdate.length} 条`,
+    ];
+    if (timedOut) summaryLines.push(`⏱️ 接近超时上限，下次执行将自动续跑`);
+    if (allErrors.length > 0) summaryLines.push(`\n错误样例：\n${allErrors.join('\n')}`);
+    await sendFeishuNotification(
+      `${statusEmoji} 星图监控 - 执行完成`,
+      summaryLines.join('\n'),
+    );
   } catch (e: any) {
     await updateStatus(kv, {
       state: 'error',
       message: `❌ 执行失败: ${e?.message ?? String(e)}`,
       lastRunAt: startTime,
     });
+    // 发送飞书通知（失败）
+    const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
+    await sendFeishuNotification(
+      `❌ 星图监控 - 执行失败`,
+      [
+        `触发方式：${triggerLabel}`,
+        `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+        `错误信息：${e?.message ?? String(e)}`,
+      ].join('\n'),
+    );
     throw e;
   } finally {
     await releaseLock(kv);
