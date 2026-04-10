@@ -59,12 +59,13 @@ export async function fetchAllRecords(
   appToken: string,
   token: string,
   tableId: string,
+  onProgress?: (loaded: number) => void,
 ): Promise<any[]> {
   const all: any[] = [];
   let pageToken: string | undefined;
 
   do {
-    const params = new URLSearchParams({ page_size: '100' });
+    const params = new URLSearchParams({ page_size: '500' });
     if (pageToken) params.set('page_token', pageToken);
 
     let res: any;
@@ -86,6 +87,7 @@ export async function fetchAllRecords(
     if (!res) throw lastErr;
 
     all.push(...(res.data?.items ?? []));
+    if (onProgress) onProgress(all.length);
     pageToken = res.data?.has_more ? res.data.page_token : undefined;
   } while (pageToken);
 

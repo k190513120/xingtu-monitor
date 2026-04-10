@@ -273,6 +273,15 @@ export async function executeTask(
       config.targetAppToken,
       config.targetPersonalBaseToken,
       config.targetTableId,
+      async (loaded: number) => {
+        await updateStatus(kv, {
+          state: 'running',
+          message: `正在读取目标表已有数据（已加载 ${loaded} 条）...`,
+          totalCount: bloggerEntries.length,
+          processedCount: startIndex,
+          lastRunAt: startTime,
+        });
+      },
     );
 
     // 构建去重索引：「星图ID_视频ID」→ record_id
@@ -286,9 +295,9 @@ export async function executeTask(
     }
     console.log(`[executor] 目标表已有 ${existingVideoMap.size} 条视频记录`);
 
-    // ── 第二步：并发处理博主 ────────────────────────────────────────────
-    const allToCreate: Record<string, any>[] = [];
-    const allToUpdate: { record_id: string; fields: Record<string, any> }[] = [];
+    // ── 第二步：并发处理博主（每批处理完立即写入目标表）───────────────────
+    let totalCreated = 0;
+    let totalUpdated = 0;
     const allErrors: string[] = [];
     let processed = startIndex;
     let errorCount = 0;
@@ -316,7 +325,11 @@ export async function executeTask(
         }),
       );
 
+      // 本批次需要写入的数据
+      const batchToCreate: Record<string, any>[] = [];
+      const batchToUpdate: { record_id: string; fields: Record<string, any> }[] = [];
       const errorDetails: string[] = [];
+
       for (let j = 0; j < results.length; j++) {
         const result = results[j];
         const entry = batch[j];
@@ -356,9 +369,9 @@ export async function executeTask(
             const dedupKey = `${video.kolId}_${video.videoId}`;
             const existingRecordId = existingVideoMap.get(dedupKey);
             if (existingRecordId) {
-              allToUpdate.push({ record_id: existingRecordId, fields });
+              batchToUpdate.push({ record_id: existingRecordId, fields });
             } else {
-              allToCreate.push(fields);
+              batchToCreate.push(fields);
               existingVideoMap.set(dedupKey, '__pending__'); // 防止同批次重复
             }
           }
@@ -371,50 +384,48 @@ export async function executeTask(
         }
       }
 
+      // ── 每批处理完立即写入目标表 ──────────────────────────────────────
+      try {
+        if (batchToCreate.length > 0) {
+          await batchCreateRecords(
+            config.targetAppToken,
+            config.targetPersonalBaseToken,
+            config.targetTableId,
+            batchToCreate,
+          );
+        }
+        if (batchToUpdate.length > 0) {
+          await batchUpdateRecords(
+            config.targetAppToken,
+            config.targetPersonalBaseToken,
+            config.targetTableId,
+            batchToUpdate,
+          );
+        }
+        totalCreated += batchToCreate.length;
+        totalUpdated += batchToUpdate.length;
+      } catch (e: any) {
+        console.error(`[executor] 批量写入目标表失败:`, e?.message);
+        if (allErrors.length < 5) allErrors.push(`写入失败: ${e?.message?.slice(0, 100)}`);
+      }
+
       processed += batch.length;
+
+      // ── 每批保存游标，即使后续超时也不会丢失进度 ──────────────────────
+      await saveCursor(kv, { startIndex: processed, date: cursor.date });
 
       const errorSuffix = errorDetails.length > 0 ? `\n最近错误: ${errorDetails.join(' | ')}` : '';
       await updateStatus(kv, {
         state: 'running',
-        message: `进度 ${processed}/${bloggerEntries.length}（${errorCount} 个失败），新增 ${allToCreate.length} / 更新 ${allToUpdate.length} 条视频${errorSuffix}`,
+        message: `进度 ${processed}/${bloggerEntries.length}（${errorCount} 个失败），已写入：新增 ${totalCreated} / 更新 ${totalUpdated} 条视频${errorSuffix}`,
         totalCount: bloggerEntries.length,
         processedCount: processed,
-        videoCount: allToCreate.length + allToUpdate.length,
+        videoCount: totalCreated + totalUpdated,
         lastRunAt: startTime,
       });
 
       if (i + CONCURRENCY < pendingEntries.length) {
         await new Promise(r => setTimeout(r, BATCH_DELAY));
-      }
-    }
-
-    // ── 保存游标（支持下次续跑）──────────────────────────────────────────
-    await saveCursor(kv, { startIndex: processed, date: cursor.date });
-
-    // ── 第三步：写入目标表（upsert）──────────────────────────────────────
-    if (allToCreate.length > 0 || allToUpdate.length > 0) {
-      await updateStatus(kv, {
-        state: 'running',
-        message: `正在写入目标表：新增 ${allToCreate.length} 条，更新 ${allToUpdate.length} 条...`,
-        lastRunAt: startTime,
-      });
-
-      if (allToCreate.length > 0) {
-        await batchCreateRecords(
-          config.targetAppToken,
-          config.targetPersonalBaseToken,
-          config.targetTableId,
-          allToCreate,
-        );
-      }
-
-      if (allToUpdate.length > 0) {
-        await batchUpdateRecords(
-          config.targetAppToken,
-          config.targetPersonalBaseToken,
-          config.targetTableId,
-          allToUpdate,
-        );
       }
     }
 
@@ -426,10 +437,10 @@ export async function executeTask(
 
     await updateStatus(kv, {
       state: doneState,
-      message: `✅ 完成！处理博主 ${processed}/${bloggerEntries.length} 个（${errorCount} 个失败），新增 ${allToCreate.length} / 更新 ${allToUpdate.length} 条视频${timeoutInfo}${finalErrorInfo}`,
+      message: `✅ 完成！处理博主 ${processed}/${bloggerEntries.length} 个（${errorCount} 个失败），新增 ${totalCreated} / 更新 ${totalUpdated} 条视频${timeoutInfo}${finalErrorInfo}`,
       totalCount: bloggerEntries.length,
       processedCount: processed,
-      videoCount: allToCreate.length + allToUpdate.length,
+      videoCount: totalCreated + totalUpdated,
       lastRunAt: startTime,
     });
 
@@ -445,8 +456,8 @@ export async function executeTask(
       `执行耗时：${durationSec} 秒`,
       `处理博主：${processed}/${bloggerEntries.length} 个`,
       `失败博主：${errorCount} 个`,
-      `视频新增：${allToCreate.length} 条`,
-      `视频更新：${allToUpdate.length} 条`,
+      `视频新增：${totalCreated} 条`,
+      `视频更新：${totalUpdated} 条`,
       `目标表已有视频：${existingVideoMap.size} 条`,
       ``,
       `📋 博主表：${sourceTableUrl}`,
