@@ -9,9 +9,9 @@ import {
   updateRecord,
 } from './bitable';
 
-// 并发数
-const CONCURRENCY = 20;
-const BATCH_DELAY = 300;
+// 每批处理博主数（串行处理，避免 TikHub QPS 过高）
+const CONCURRENCY = 1;
+const BATCH_DELAY = 100;
 // 单个博主处理超时：60 秒
 const PER_BLOGGER_TIMEOUT_MS = 60_000;
 
