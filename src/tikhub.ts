@@ -13,19 +13,34 @@ export class TikHubClient {
     let lastError = '';
     for (let attempt = 0; attempt <= retries; attempt++) {
       if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
-      const res = await fetch(url.toString(), {
-        headers: { Authorization: `Bearer ${this.apiKey}` },
-      });
-      const text = await res.text();
-      if (res.ok) {
-        // 用正则把超长数字转成字符串，避免 JS 精度丢失（如 kolId 19位）
-        const safeJson = text.replace(/:\s*(\d{16,})/g, ': "$1"');
-        return JSON.parse(safeJson);
+      // 单次请求 15 秒超时，防止连接挂起卡死整个任务
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), 15_000);
+      try {
+        const res = await fetch(url.toString(), {
+          headers: { Authorization: `Bearer ${this.apiKey}` },
+          signal: controller.signal,
+        });
+        clearTimeout(timeout);
+        const text = await res.text();
+        if (res.ok) {
+          // 用正则把超长数字转成字符串，避免 JS 精度丢失（如 kolId 19位）
+          const safeJson = text.replace(/:\s*(\d{16,})/g, ': "$1"');
+          return JSON.parse(safeJson);
+        }
+        lastError = `TikHub ${res.status} [${path}]: ${text.slice(0, 200)}`;
+        // 400 可能是临时性的（TikHub 上游不稳定），重试
+        if (res.status >= 500 || res.status === 400) continue;
+        break; // 其他错误不重试
+      } catch (e: any) {
+        clearTimeout(timeout);
+        if (e.name === 'AbortError') {
+          lastError = `TikHub 请求超时(15s) [${path}]`;
+          continue; // 超时后重试
+        }
+        lastError = `TikHub 网络错误 [${path}]: ${e?.message?.slice(0, 200)}`;
+        continue; // 网络错误也重试
       }
-      lastError = `TikHub ${res.status} [${path}]: ${text.slice(0, 200)}`;
-      // 400 可能是临时性的（TikHub 上游不稳定），重试
-      if (res.status >= 500 || res.status === 400) continue;
-      break; // 其他错误不重试
     }
     throw new Error(lastError);
   }

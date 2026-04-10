@@ -12,6 +12,8 @@ import {
 // 并发数
 const CONCURRENCY = 20;
 const BATCH_DELAY = 300;
+// 单个博主处理超时：60 秒
+const PER_BLOGGER_TIMEOUT_MS = 60_000;
 
 // 安全执行时间：13 分钟（Workers 付费版 Cron 上限 15 分钟，留 2 分钟缓冲）
 const MAX_EXECUTION_MS = 13 * 60 * 1000;
@@ -155,6 +157,15 @@ export async function executeTask(
       message: '⚠️ 已有任务正在执行，请等待完成后再试',
       lastRunAt: Date.now(),
     });
+    const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
+    await sendFeishuNotification(
+      `⏭️ 星图监控 - 跳过执行`,
+      [
+        `触发方式：${triggerLabel}`,
+        `时间：${new Date().toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+        `原因：已有任务正在执行，跳过本次`,
+      ].join('\n'),
+    );
     return;
   }
 
@@ -189,15 +200,28 @@ export async function executeTask(
         message: `博主表中未找到有效的抖音主页链接，请检查字段名 "${config.profileUrlFieldName}" 是否正确`,
         lastRunAt: startTime,
       });
+      const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
+      await sendFeishuNotification(
+        `⚠️ 星图监控 - 无有效博主`,
+        [
+          `触发方式：${triggerLabel}`,
+          `时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+          `原因：博主表中未找到有效的抖音主页链接`,
+          `字段名：${config.profileUrlFieldName}`,
+          `总记录数：${records.length}`,
+          `博主表：${config.sourceTableId}`,
+        ].join('\n'),
+      );
       return;
     }
 
     // ── 读取游标，决定从哪里开始 ──────────────────────────────────────
+    // 手动执行时始终从头开始，不受游标限制
     const cursor = await getCursor(kv);
-    const startIndex = cursor.startIndex;
+    const startIndex = source === 'manual' ? 0 : cursor.startIndex;
 
-    // 如果游标已超过博主数量，说明今天已经全部处理完
-    if (startIndex >= bloggerEntries.length) {
+    // 仅 cron 模式下：如果游标已超过博主数量，说明今天已经全部处理完
+    if (source !== 'manual' && startIndex >= bloggerEntries.length) {
       await updateStatus(kv, {
         state: 'done',
         message: `✅ 今日所有 ${bloggerEntries.length} 个博主已处理完毕（无需重复执行）`,
@@ -205,6 +229,16 @@ export async function executeTask(
         processedCount: bloggerEntries.length,
         lastRunAt: startTime,
       });
+      await sendFeishuNotification(
+        `⏭️ 星图监控 - 无需重复执行`,
+        [
+          `触发方式：定时任务`,
+          `时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
+          `原因：今日 ${bloggerEntries.length} 个博主已全部处理完毕，跳过`,
+          `博主表：${config.sourceTableId}`,
+          `目标表：${config.targetTableId}`,
+        ].join('\n'),
+      );
       return;
     }
 
@@ -272,9 +306,14 @@ export async function executeTask(
       const batch = pendingEntries.slice(i, i + CONCURRENCY);
 
       const results = await Promise.allSettled(
-        batch.map(entry =>
-          processSingleBlogger(tikhub, entry.profileUrl, entry.existingKolId),
-        ),
+        batch.map(entry => {
+          // 单博主超时保护：超过 60 秒自动跳过，不阻塞其他博主
+          const bloggerPromise = processSingleBlogger(tikhub, entry.profileUrl, entry.existingKolId);
+          const timeoutPromise = new Promise<never>((_, reject) =>
+            setTimeout(() => reject(new Error(`处理超时(60s)，已跳过: ${entry.profileUrl.slice(-30)}`)), PER_BLOGGER_TIMEOUT_MS),
+          );
+          return Promise.race([bloggerPromise, timeoutPromise]);
+        }),
       );
 
       const errorDetails: string[] = [];
@@ -398,6 +437,8 @@ export async function executeTask(
     const durationSec = Math.round((Date.now() - startTime) / 1000);
     const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
     const statusEmoji = errorCount > 0 ? '⚠️' : '✅';
+    const sourceTableUrl = `https://bytedance.larkoffice.com/base/${config.sourceAppToken}?table=${config.sourceTableId}`;
+    const targetTableUrl = `https://bytedance.larkoffice.com/base/${config.targetAppToken}?table=${config.targetTableId}`;
     const summaryLines = [
       `触发方式：${triggerLabel}`,
       `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
@@ -406,6 +447,10 @@ export async function executeTask(
       `失败博主：${errorCount} 个`,
       `视频新增：${allToCreate.length} 条`,
       `视频更新：${allToUpdate.length} 条`,
+      `目标表已有视频：${existingVideoMap.size} 条`,
+      ``,
+      `📋 博主表：${sourceTableUrl}`,
+      `📊 目标表：${targetTableUrl}`,
     ];
     if (timedOut) summaryLines.push(`⏱️ 接近超时上限，下次执行将自动续跑`);
     if (allErrors.length > 0) summaryLines.push(`\n错误样例：\n${allErrors.join('\n')}`);
@@ -420,13 +465,18 @@ export async function executeTask(
       lastRunAt: startTime,
     });
     // 发送飞书通知（失败）
-    const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
+    const triggerLabel2 = source === 'cron' ? '定时任务' : '手动执行';
+    const sourceTableUrl2 = `https://bytedance.larkoffice.com/base/${config.sourceAppToken}?table=${config.sourceTableId}`;
+    const targetTableUrl2 = `https://bytedance.larkoffice.com/base/${config.targetAppToken}?table=${config.targetTableId}`;
     await sendFeishuNotification(
       `❌ 星图监控 - 执行失败`,
       [
-        `触发方式：${triggerLabel}`,
+        `触发方式：${triggerLabel2}`,
         `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
         `错误信息：${e?.message ?? String(e)}`,
+        ``,
+        `📋 博主表：${sourceTableUrl2}`,
+        `📊 目标表：${targetTableUrl2}`,
       ].join('\n'),
     );
     throw e;

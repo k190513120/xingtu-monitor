@@ -36,6 +36,8 @@ export default {
           ...config,
           updatedAt: Date.now(),
         }));
+        // 配置变更时重置游标，避免换表后被旧游标跳过
+        await env.TASK_STORE.delete('task_cursor');
         return json({ success: true });
       } catch (e: any) {
         return json({ success: false, error: e?.message }, 400);

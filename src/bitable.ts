@@ -8,14 +8,28 @@ async function request(
   token: string,
   body?: unknown,
 ): Promise<any> {
-  const res = await fetch(`${BASE_API}${path}`, {
-    method,
-    headers: {
-      Authorization: `Bearer ${token}`,
-      'Content-Type': 'application/json',
-    },
-    body: body !== undefined ? JSON.stringify(body) : undefined,
-  });
+  // 单次请求 30 秒超时，防止飞书 API 挂起卡死整个任务
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 30_000);
+  let res: Response;
+  try {
+    res = await fetch(`${BASE_API}${path}`, {
+      method,
+      headers: {
+        Authorization: `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      },
+      body: body !== undefined ? JSON.stringify(body) : undefined,
+      signal: controller.signal,
+    });
+  } catch (e: any) {
+    clearTimeout(timeout);
+    if (e.name === 'AbortError') {
+      throw new Error(`飞书API请求超时(30s) [${method} ${path}]`);
+    }
+    throw new Error(`飞书API网络错误 [${method} ${path}]: ${e?.message?.slice(0, 200)}`);
+  }
+  clearTimeout(timeout);
 
   const text = await res.text();
   let json: any;
@@ -40,7 +54,7 @@ async function request(
   return json;
 }
 
-// 读取一张表的所有记录（自动翻页）
+// 读取一张表的所有记录（自动翻页，单页失败重试 2 次）
 export async function fetchAllRecords(
   appToken: string,
   token: string,
@@ -53,11 +67,23 @@ export async function fetchAllRecords(
     const params = new URLSearchParams({ page_size: '100' });
     if (pageToken) params.set('page_token', pageToken);
 
-    const res = await request(
-      'GET',
-      `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?${params}`,
-      token,
-    );
+    let res: any;
+    let lastErr: any;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 1000 * attempt));
+        res = await request(
+          'GET',
+          `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records?${params}`,
+          token,
+        );
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.error(`[bitable] fetchAllRecords 第${attempt + 1}次失败:`, (e as any)?.message);
+      }
+    }
+    if (!res) throw lastErr;
 
     all.push(...(res.data?.items ?? []));
     pageToken = res.data?.has_more ? res.data.page_token : undefined;
