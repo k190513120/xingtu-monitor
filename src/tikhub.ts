@@ -66,6 +66,8 @@ export class TikHubClient {
   }
 
   // 步骤2：获取星图视频列表
+  // ⚠️ v1/v2 都只取 latest_star_item_info（星图商单视频），
+  // 不取 latest_item_info（个人/普通视频）——业务只关心星图数据
   // 默认用便宜的 v2 接口；forceV1=true 时走贵的 v1（应急）
   async getVideoList(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
     if (this.forceV1) return this.getVideoListV1(kolId);
@@ -73,6 +75,7 @@ export class TikHubClient {
   }
 
   // v2 接口：get_author_show_items（便宜，偶尔不稳定）
+  // 只返回星图视频
   private async getVideoListV2(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_show_items', {
       o_author_id: kolId,
@@ -81,6 +84,7 @@ export class TikHubClient {
     const data = res.data?.data ?? res.data ?? {};
     const result: { video: any; videoType: string }[] = [];
     const seen = new Set<string>();
+    // 只读 latest_star_item_info，忽略 latest_item_info（个人视频）
     if (Array.isArray(data.latest_star_item_info)) {
       for (const v of data.latest_star_item_info) {
         const id = String(v.item_id ?? '');
@@ -91,12 +95,14 @@ export class TikHubClient {
   }
 
   // v1 接口：kol_video_performance_v1（稳定但贵，约 v2 的 20 倍价格）
+  // 只返回星图视频（onlyAssign=true 让上游只返回商单）
   private async getVideoListV1(kolId: string): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_video_performance_v1', {
       kolId,
       onlyAssign: true,
     });
     const innerData = res.data?.data ?? res.data ?? {};
+    // 只读 latest_star_item_info，忽略 latest_item_info（个人视频）
     const starItems = innerData.latest_star_item_info;
     const result: { video: any; videoType: string }[] = [];
     const seen = new Set<string>();

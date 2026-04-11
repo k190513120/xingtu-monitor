@@ -71,6 +71,14 @@ export default {
       return json(status ?? { state: 'idle', message: '暂无执行记录' });
     }
 
+    // 应急：重置游标 + 解锁 POST /api/reset-cursor
+    // 用于 TikHub 恢复后强制下一次 cron 从头跑（即使今天已经标了 completedDate）
+    if (url.pathname === '/api/reset-cursor' && method === 'POST') {
+      await env.TASK_STORE.delete('task_cursor');
+      await env.TASK_STORE.delete('task_lock');
+      return json({ success: true, message: '游标和任务锁已重置，下次 cron 会从头跑' });
+    }
+
     // 一键初始化目标表 POST /api/init
     if (url.pathname === '/api/init' && method === 'POST') {
       const { appToken, token, tableName } = await request.json() as any;
@@ -130,8 +138,6 @@ export default {
         ]);
         steps.businessCard = businessCard;
         steps.videoCount = Array.isArray(videoItems) ? videoItems.length : 0;
-        steps.starCount = Array.isArray(videoItems) ? videoItems.filter((i: any) => i.videoType === '星图视频').length : 0;
-        steps.regularCount = Array.isArray(videoItems) ? videoItems.filter((i: any) => i.videoType === '普通视频').length : 0;
         steps.priceList = Array.isArray(priceList) ? priceList.map((p: any) => ({ desc: p.desc, price: p.price, video_type: p.video_type })) : priceList;
         if (Array.isArray(videoItems) && videoItems.length > 0) {
           const sample = videoItems[0];

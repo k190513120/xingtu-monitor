@@ -197,8 +197,8 @@ async function processSingleBlogger(
             data: { nickName: '', avatarUri: '', wechat: '', mcnName: '', mcnLogo: '' } as BloggerInfo,
           }));
 
-  // 视频列表：必须每次都拉
-  const videoItemsPromise = tikhub.getVideoList(kolId).catch(() => [] as { video: any; videoType: string }[]);
+  // 视频列表：必须每次都拉。失败直接抛，让整个博主进入失败统计（不再静默吞异常）
+  const videoItemsPromise = tikhub.getVideoList(kolId);
 
   // 报价：有缓存直接用，否则调接口
   const priceListPromise: Promise<{ ok: boolean; data: any[] }> =
@@ -557,13 +557,25 @@ export async function executeTask(
       }
     }
 
-    // ── 本次是否完成全量？如果是，标记 completedDate 并重置游标为 0 ────────
+    // ── 本次是否完成全量？判断是否标记 completedDate ────────────────────
+    // 失败率过高（>30%）判定为上游不稳定：不标 completedDate，把游标重置回 0，
+    // 让下次 cron 自动从头重试。已经成功的博主下次会命中缓存，不会重复调 API
     const isFullyCompleted = processed >= bloggerEntries.length;
-    if (isFullyCompleted) {
+    const failureRate = processed > 0 ? errorCount / processed : 0;
+    const tooManyFailures = failureRate > 0.3;
+
+    if (isFullyCompleted && !tooManyFailures) {
       await saveCursor(kv, {
         startIndex: 0,
         date: today,
         completedDate: today,
+      });
+    } else if (isFullyCompleted && tooManyFailures) {
+      // 整轮跑完了但失败太多 → 不标完成，重置游标到 0 让下一轮重试
+      await saveCursor(kv, {
+        startIndex: 0,
+        date: today,
+        completedDate: cursor.completedDate, // 保留上一次的完成日期（可能是昨天），避免永远跳过
       });
     }
 
@@ -571,7 +583,8 @@ export async function executeTask(
     const timeoutInfo = timedOut
       ? `\n⏱️ 本次接近超时上限，已处理到第 ${processed} 个博主，下次 cron 将自动续跑`
       : '';
-    const doneState = 'done';
+    // 失败率过高 → 状态 error，醒目提示
+    const doneState: 'done' | 'error' = tooManyFailures ? 'error' : 'done';
 
     await updateStatus(kv, {
       state: doneState,
@@ -585,7 +598,8 @@ export async function executeTask(
     // 发送飞书通知（成功）
     const durationSec = Math.round((Date.now() - startTime) / 1000);
     const triggerLabel = source === 'cron' ? '定时任务' : '手动执行';
-    const statusEmoji = errorCount > 0 ? '⚠️' : '✅';
+    const statusEmoji = tooManyFailures ? '❌' : (errorCount > 0 ? '⚠️' : '✅');
+    const failureRatePct = (failureRate * 100).toFixed(1);
     const sourceTableUrl = `https://bytedance.larkoffice.com/base/${config.sourceAppToken}?table=${config.sourceTableId}`;
     const targetTableUrl = `https://bytedance.larkoffice.com/base/${config.targetAppToken}?table=${config.targetTableId}`;
     const summaryLines = [
@@ -595,7 +609,7 @@ export async function executeTask(
       `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
       `执行耗时：${durationSec} 秒`,
       `处理博主：${processed}/${bloggerEntries.length} 个`,
-      `失败博主：${errorCount} 个`,
+      `失败博主：${errorCount} 个（失败率 ${failureRatePct}%）`,
       `视频新增：${totalCreated} 条`,
       `视频更新：${totalUpdated} 条`,
       `目标表已有视频：${existingVideoMap.size} 条`,
@@ -605,12 +619,16 @@ export async function executeTask(
       `📊 目标表：${targetTableUrl}`,
     ];
     if (timedOut) summaryLines.push(`⏱️ 接近超时上限，下次 cron 将自动续跑`);
-    if (isFullyCompleted) summaryLines.push(`🎉 本轮全部 ${bloggerEntries.length} 个博主已完成`);
+    if (tooManyFailures) {
+      summaryLines.push(`🚨 失败率 > 30%，判定为上游不稳定，本次不标完成 → 下次 cron 将自动重试（已成功博主会命中缓存）`);
+    } else if (isFullyCompleted) {
+      summaryLines.push(`🎉 本轮全部 ${bloggerEntries.length} 个博主已完成`);
+    }
     if (allErrors.length > 0) summaryLines.push(`\n错误样例：\n${allErrors.join('\n')}`);
-    await sendFeishuNotification(
-      `${statusEmoji} 星图监控 - 执行完成`,
-      summaryLines.join('\n'),
-    );
+    const notifyTitle = tooManyFailures
+      ? `${statusEmoji} 星图监控 - 上游异常`
+      : `${statusEmoji} 星图监控 - 执行完成`;
+    await sendFeishuNotification(notifyTitle, summaryLines.join('\n'));
   } catch (e: any) {
     await updateStatus(kv, {
       state: 'error',
