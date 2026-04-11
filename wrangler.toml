@@ -6,9 +6,10 @@ routes = [
   { pattern = "xingtu.xiaomiao.win", custom_domain = true, zone_id = "81498ac216563761c63636b270a4caf1" }
 ]
 
-# 定时任务：每天早上9点执行
+# 定时任务：北京时间 9:00-17:00 每小时执行一次（UTC 1-9）
+# 首次 9 点启动全量处理，未跑完时后续 cron 自动续跑；全量完成后后续 cron 静默跳过
 [triggers]
-crons = ["0 1 * * *"]  # UTC 1:00 = 北京时间 9:00
+crons = ["0 1-9 * * *"]
 
 # 静态资源：Vite 构建产物（dist/）
 # not_found_handling = "none" 让未匹配到静态文件的请求（如 /api/*）交给 Worker 处理

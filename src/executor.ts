@@ -9,9 +9,9 @@ import {
   updateRecord,
 } from './bitable';
 
-// 每批处理博主数（串行处理，避免 TikHub QPS 过高）
-const CONCURRENCY = 1;
-const BATCH_DELAY = 100;
+// 每批处理博主数（3 并发，TikHub 峰值 ~9 qps，飞书表写入会串行化）
+const CONCURRENCY = 3;
+const BATCH_DELAY = 200;
 // 单个博主处理超时：60 秒
 const PER_BLOGGER_TIMEOUT_MS = 60_000;
 
@@ -75,16 +75,26 @@ async function releaseLock(kv: KVNamespace): Promise<void> {
 // ── 游标管理（支持分批续跑）────────────────────────────────────────────────
 interface TaskCursor {
   startIndex: number;      // 下次从第几个博主开始
-  date: string;            // 当天日期，日期变化时重置游标
+  date: string;            // 本轮开始日期（仅用于展示）
+  completedDate?: string;  // 最近一次完成全量的日期（用于判断是否需要开启新一轮）
 }
 
 async function getCursor(kv: KVNamespace): Promise<TaskCursor> {
   const cursor = await kv.get('task_cursor', 'json') as TaskCursor | null;
   const today = new Date().toISOString().slice(0, 10);
-  // 日期变了或没有游标，从头开始
-  if (!cursor || cursor.date !== today) {
+  // 没游标：第一次跑，从 0 开始
+  if (!cursor) {
     return { startIndex: 0, date: today };
   }
+  // 如果最近一次"完成全量"是今天，说明今日已处理完，后续 cron 无需再跑
+  if (cursor.completedDate === today) {
+    return cursor;
+  }
+  // 已经完成上一轮（completedDate 不是今天），开启今天的新一轮
+  if (cursor.completedDate && cursor.completedDate !== today && cursor.startIndex === 0) {
+    return { startIndex: 0, date: today };
+  }
+  // 没完成过 / 上一轮未跑完：继续从上次的断点续跑（即使跨天）
   return cursor;
 }
 
@@ -218,10 +228,11 @@ export async function executeTask(
     // ── 读取游标，决定从哪里开始 ──────────────────────────────────────
     // 手动执行时始终从头开始，不受游标限制
     const cursor = await getCursor(kv);
+    const today = new Date().toISOString().slice(0, 10);
     const startIndex = source === 'manual' ? 0 : cursor.startIndex;
 
-    // 仅 cron 模式下：如果游标已超过博主数量，说明今天已经全部处理完
-    if (source !== 'manual' && startIndex >= bloggerEntries.length) {
+    // 仅 cron 模式下：如果今日已完成全量，静默跳过（不发 webhook 避免刷屏）
+    if (source !== 'manual' && cursor.completedDate === today) {
       await updateStatus(kv, {
         state: 'done',
         message: `✅ 今日所有 ${bloggerEntries.length} 个博主已处理完毕（无需重复执行）`,
@@ -229,16 +240,7 @@ export async function executeTask(
         processedCount: bloggerEntries.length,
         lastRunAt: startTime,
       });
-      await sendFeishuNotification(
-        `⏭️ 星图监控 - 无需重复执行`,
-        [
-          `触发方式：定时任务`,
-          `时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
-          `原因：今日 ${bloggerEntries.length} 个博主已全部处理完毕，跳过`,
-          `博主表：${config.sourceTableId}`,
-          `目标表：${config.targetTableId}`,
-        ].join('\n'),
-      );
+      console.log(`[executor] 今日已完成，跳过本次 cron`);
       return;
     }
 
@@ -412,7 +414,11 @@ export async function executeTask(
       processed += batch.length;
 
       // ── 每批保存游标，即使后续超时也不会丢失进度 ──────────────────────
-      await saveCursor(kv, { startIndex: processed, date: cursor.date });
+      await saveCursor(kv, {
+        startIndex: processed,
+        date: cursor.date,
+        completedDate: cursor.completedDate,
+      });
 
       const errorSuffix = errorDetails.length > 0 ? `\n最近错误: ${errorDetails.join(' | ')}` : '';
       await updateStatus(kv, {
@@ -429,11 +435,21 @@ export async function executeTask(
       }
     }
 
+    // ── 本次是否完成全量？如果是，标记 completedDate 并重置游标为 0 ────────
+    const isFullyCompleted = processed >= bloggerEntries.length;
+    if (isFullyCompleted) {
+      await saveCursor(kv, {
+        startIndex: 0,
+        date: today,
+        completedDate: today,
+      });
+    }
+
     const finalErrorInfo = allErrors.length > 0 ? `\n错误详情: ${allErrors.join('\n')}` : '';
     const timeoutInfo = timedOut
-      ? `\n⏱️ 本次接近超时上限，已处理到第 ${processed} 个博主，下次执行将自动续跑`
+      ? `\n⏱️ 本次接近超时上限，已处理到第 ${processed} 个博主，下次 cron 将自动续跑`
       : '';
-    const doneState = processed >= bloggerEntries.length ? 'done' : 'done';
+    const doneState = 'done';
 
     await updateStatus(kv, {
       state: doneState,
@@ -463,7 +479,8 @@ export async function executeTask(
       `📋 博主表：${sourceTableUrl}`,
       `📊 目标表：${targetTableUrl}`,
     ];
-    if (timedOut) summaryLines.push(`⏱️ 接近超时上限，下次执行将自动续跑`);
+    if (timedOut) summaryLines.push(`⏱️ 接近超时上限，下次 cron 将自动续跑`);
+    if (isFullyCompleted) summaryLines.push(`🎉 本轮全部 ${bloggerEntries.length} 个博主已完成`);
     if (allErrors.length > 0) summaryLines.push(`\n错误样例：\n${allErrors.join('\n')}`);
     await sendFeishuNotification(
       `${statusEmoji} 星图监控 - 执行完成`,
