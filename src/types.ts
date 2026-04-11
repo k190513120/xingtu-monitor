@@ -24,6 +24,10 @@ export interface TaskConfig {
   // 名片/报价缓存天数：缓存未过期时不调接口（0=禁用缓存，每次都拉最新）
   cacheDays?: number;
 
+  // 定时任务允许运行的星期（0=周日, 1=周一, ..., 6=周六），按新加坡时区(UTC+8)判断
+  // 未设置或空数组 = 每天都跑（向后兼容）
+  runDays?: number[];
+
   updatedAt?: number;
 }
 

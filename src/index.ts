@@ -172,6 +172,18 @@ export default {
       console.log('[cron] 未找到任务配置，跳过执行');
       return;
     }
+
+    // 检查今天（新加坡时间 UTC+8）是否在允许运行的星期列表中
+    // runDays 未设置或为空 = 每天都跑（向后兼容原行为）
+    if (Array.isArray(config.runDays) && config.runDays.length > 0) {
+      const sgDay = new Date(Date.now() + 8 * 60 * 60 * 1000).getUTCDay(); // 0=周日, 1=周一, ..., 6=周六
+      if (!config.runDays.includes(sgDay)) {
+        const names = ['周日', '周一', '周二', '周三', '周四', '周五', '周六'];
+        console.log(`[cron] 今天是${names[sgDay]}，不在配置的运行日内，跳过本次`);
+        return;
+      }
+    }
+
     console.log('[cron] 定时任务开始执行');
     ctx.waitUntil(executeTask(config, env.TASK_STORE, 'cron'));
   },

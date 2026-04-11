@@ -104,6 +104,18 @@
     .same-base-row { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
     .same-base-row input[type=checkbox] { width: auto; }
     .same-base-row label { margin: 0; color: #1f2329; font-size: 12px; }
+    .day-row { display: flex; flex-wrap: wrap; gap: 6px 10px; }
+    .day-row label {
+      display: inline-flex;
+      align-items: center;
+      gap: 4px;
+      margin: 0;
+      color: #1f2329;
+      font-size: 12px;
+      cursor: pointer;
+      user-select: none;
+    }
+    .day-row input[type=checkbox] { width: auto; margin: 0; }
   </style>
 </head>
 <body>
@@ -198,6 +210,19 @@
           <div class="hint">名片 / 报价缓存天数，0 = 每次都请求</div>
         </div>
       </div>
+      <div class="field" style="margin-top:6px">
+        <label>定时任务运行日（新加坡时间）</label>
+        <div class="day-row" id="runDaysRow">
+          <label><input type="checkbox" class="run-day" value="1" /> 周一</label>
+          <label><input type="checkbox" class="run-day" value="2" /> 周二</label>
+          <label><input type="checkbox" class="run-day" value="3" /> 周三</label>
+          <label><input type="checkbox" class="run-day" value="4" /> 周四</label>
+          <label><input type="checkbox" class="run-day" value="5" /> 周五</label>
+          <label><input type="checkbox" class="run-day" value="6" /> 周六</label>
+          <label><input type="checkbox" class="run-day" value="0" /> 周日</label>
+        </div>
+        <div class="hint">不勾选任何一个 = 每天都跑；手动执行不受此限制</div>
+      </div>
     </div>
 
     <div class="btn-row">
@@ -226,6 +251,7 @@
       <div class="hint" style="line-height:1.8">
         <strong>每 30 分钟</strong> 自动触发一次，配合游标续跑直到当日全量完成。<br/>
         当日完成后后续 cron 静默跳过，无额外成本。<br/>
+        不在「运行日」配置里的日期也会静默跳过。<br/>
         每次执行<strong>增量/更新</strong>写入，不删除历史数据。
       </div>
     </div>

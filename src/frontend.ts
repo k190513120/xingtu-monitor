@@ -161,7 +161,10 @@ async function loadTargetTables() {
   const apiVersion = (document.getElementById('apiVersion') as HTMLSelectElement).value || 'v2';
   const cacheDaysRaw = (document.getElementById('cacheDays') as HTMLInputElement).value.trim();
   const cacheDays = cacheDaysRaw === '' ? 7 : Math.max(0, Number(cacheDaysRaw) || 0);
-  const cfg: Record<string, any> = { ...requiredCfg, apiVersion, cacheDays };
+  const runDays = Array.from(
+    document.querySelectorAll<HTMLInputElement>('.run-day:checked'),
+  ).map((el) => Number(el.value));
+  const cfg: Record<string, any> = { ...requiredCfg, apiVersion, cacheDays, runDays };
   const missing = Object.entries(requiredCfg)
     .filter(([, v]) => !v)
     .map(([k]) => k);
@@ -268,6 +271,11 @@ async function init() {
     (document.getElementById('apiVersion') as HTMLSelectElement).value = cfg.apiVersion || 'v2';
     (document.getElementById('cacheDays') as HTMLInputElement).value =
       cfg.cacheDays === undefined || cfg.cacheDays === null ? '7' : String(cfg.cacheDays);
+    // 恢复运行日勾选状态
+    const savedDays: number[] = Array.isArray(cfg.runDays) ? cfg.runDays : [];
+    document.querySelectorAll<HTMLInputElement>('.run-day').forEach((el) => {
+      el.checked = savedDays.includes(Number(el.value));
+    });
 
     if (cfg.sourceTableId) {
       (document.getElementById('sourceTableId') as HTMLSelectElement).value = cfg.sourceTableId;
