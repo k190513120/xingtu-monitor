@@ -79,9 +79,14 @@ interface TaskCursor {
   completedDate?: string;  // 最近一次完成全量的日期（用于判断是否需要开启新一轮）
 }
 
+// 当前"业务日期"——以新加坡/北京时区（UTC+8）为准，避免跨 UTC 午夜时重复触发
+function getBusinessDate(): string {
+  return new Date(Date.now() + 8 * 60 * 60 * 1000).toISOString().slice(0, 10);
+}
+
 async function getCursor(kv: KVNamespace): Promise<TaskCursor> {
   const cursor = await kv.get('task_cursor', 'json') as TaskCursor | null;
-  const today = new Date().toISOString().slice(0, 10);
+  const today = getBusinessDate();
   // 没游标：第一次跑，从 0 开始
   if (!cursor) {
     return { startIndex: 0, date: today };
@@ -228,7 +233,7 @@ export async function executeTask(
     // ── 读取游标，决定从哪里开始 ──────────────────────────────────────
     // 手动执行时始终从头开始，不受游标限制
     const cursor = await getCursor(kv);
-    const today = new Date().toISOString().slice(0, 10);
+    const today = getBusinessDate();
     const startIndex = source === 'manual' ? 0 : cursor.startIndex;
 
     // 仅 cron 模式下：如果今日已完成全量，静默跳过（不发 webhook 避免刷屏）
