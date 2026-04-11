@@ -148,7 +148,7 @@ async function loadTargetTables() {
 
 // ─── 保存配置 ─────────────────────────────────────────────────────────────────
 (window as any).saveConfig = async function () {
-  const cfg: Record<string, string> = {
+  const requiredCfg: Record<string, string> = {
     sourceAppToken: (document.getElementById('sourceAppToken') as HTMLInputElement).value.trim(),
     sourcePersonalBaseToken: (document.getElementById('sourceToken') as HTMLInputElement).value.trim(),
     sourceTableId: (document.getElementById('sourceTableId') as HTMLSelectElement).value,
@@ -158,7 +158,11 @@ async function loadTargetTables() {
     targetTableId: (document.getElementById('targetTableId') as HTMLSelectElement).value,
     tikHubApiKey: (document.getElementById('tikHubApiKey') as HTMLInputElement).value.trim(),
   };
-  const missing = Object.entries(cfg)
+  const apiVersion = (document.getElementById('apiVersion') as HTMLSelectElement).value || 'v2';
+  const cacheDaysRaw = (document.getElementById('cacheDays') as HTMLInputElement).value.trim();
+  const cacheDays = cacheDaysRaw === '' ? 7 : Math.max(0, Number(cacheDaysRaw) || 0);
+  const cfg: Record<string, any> = { ...requiredCfg, apiVersion, cacheDays };
+  const missing = Object.entries(requiredCfg)
     .filter(([, v]) => !v)
     .map(([k]) => k);
   if (missing.length) {
@@ -261,6 +265,9 @@ async function init() {
     (document.getElementById('sourceAppToken') as HTMLInputElement).value = cfg.sourceAppToken;
     (document.getElementById('sourceToken') as HTMLInputElement).value = cfg.sourcePersonalBaseToken || '';
     (document.getElementById('tikHubApiKey') as HTMLInputElement).value = cfg.tikHubApiKey || '';
+    (document.getElementById('apiVersion') as HTMLSelectElement).value = cfg.apiVersion || 'v2';
+    (document.getElementById('cacheDays') as HTMLInputElement).value =
+      cfg.cacheDays === undefined || cfg.cacheDays === null ? '7' : String(cfg.cacheDays);
 
     if (cfg.sourceTableId) {
       (document.getElementById('sourceTableId') as HTMLSelectElement).value = cfg.sourceTableId;

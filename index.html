@@ -183,6 +183,21 @@
         <label>API Key <span style="color:#f54a45">*</span></label>
         <input id="tikHubApiKey" type="password" placeholder="请输入 API Key" />
       </div>
+      <div class="row">
+        <div class="field">
+          <label>接口版本</label>
+          <select id="apiVersion">
+            <option value="v2">v2（默认 / 便宜）</option>
+            <option value="v1">v1（应急 / 约贵 20 倍）</option>
+          </select>
+          <div class="hint">日常用 v2；v2 不稳定时临时切 v1</div>
+        </div>
+        <div class="field">
+          <label>缓存天数</label>
+          <input id="cacheDays" type="number" min="0" max="90" step="1" placeholder="7" />
+          <div class="hint">名片 / 报价缓存天数，0 = 每次都请求</div>
+        </div>
+      </div>
     </div>
 
     <div class="btn-row">
@@ -209,9 +224,9 @@
     <div class="section" style="margin-top:10px">
       <div class="section-title">定时任务</div>
       <div class="hint" style="line-height:1.8">
-        每天 <strong>北京时间 09:00</strong> 自动执行（UTC 01:00）。<br/>
-        修改时间：编辑 <code>wrangler.toml</code> 的 <code>crons</code> 后重新 deploy。<br/>
-        每次执行<strong>追加</strong>写入，不删除历史数据。
+        <strong>每 30 分钟</strong> 自动触发一次，配合游标续跑直到当日全量完成。<br/>
+        当日完成后后续 cron 静默跳过，无额外成本。<br/>
+        每次执行<strong>增量/更新</strong>写入，不删除历史数据。
       </div>
     </div>
   </div>

@@ -18,6 +18,12 @@ export interface TaskConfig {
   // TikHub
   tikHubApiKey: string;
 
+  // 接口版本：v2 便宜（默认），v1 贵约 20 倍（应急）
+  apiVersion?: 'v1' | 'v2';
+
+  // 名片/报价缓存天数：缓存未过期时不调接口（0=禁用缓存，每次都拉最新）
+  cacheDays?: number;
+
   updatedAt?: number;
 }
 
