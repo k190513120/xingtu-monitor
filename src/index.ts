@@ -51,14 +51,20 @@ export default {
       return json(config);
     }
 
-    // 手动触发执行 POST /api/run
+    // 手动触发执行 POST /api/run?forceV1=true 可选
     if (url.pathname === '/api/run' && method === 'POST') {
       const config = await env.TASK_STORE.get('task_config', 'json') as TaskConfig | null;
       if (!config) {
         return json({ success: false, error: '请先保存配置' }, 400);
       }
-      ctx.waitUntil(executeTask(config, env.TASK_STORE, 'manual'));
-      return json({ success: true, message: '任务已启动，请在「执行」页查看进度' });
+      const forceV1 = url.searchParams.get('forceV1') === 'true';
+      ctx.waitUntil(executeTask(config, env.TASK_STORE, 'manual', forceV1));
+      return json({
+        success: true,
+        message: forceV1
+          ? '任务已启动（v1 应急模式，成本较高），请在「执行」页查看进度'
+          : '任务已启动（v2 模式），请在「执行」页查看进度',
+      });
     }
 
     // 查询执行状态 GET /api/status

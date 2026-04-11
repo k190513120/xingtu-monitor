@@ -3,7 +3,8 @@ import { VideoRecord } from './types';
 const BASE_URL = 'https://api.tikhub.io';
 
 export class TikHubClient {
-  constructor(private apiKey: string) {}
+  // forceV1: 强制使用 v1 接口（应急模式，v1 价格约为 v2 的 20 倍）
+  constructor(private apiKey: string, private forceV1 = false) {}
 
   private async get(path: string, params: Record<string, string | number | boolean>, retries = 2): Promise<any> {
     const url = new URL(`${BASE_URL}${path}`);
@@ -64,19 +65,41 @@ export class TikHubClient {
     return String(kolId);
   }
 
-  // 步骤2：获取星图视频列表（直接用稳定的 v1 接口）
-  async getVideoList(kolId: string): Promise<{ video: any; videoType: string }[]> {
+  // 步骤2：获取星图视频列表
+  // 默认用便宜的 v2 接口；forceV1=true 时走贵的 v1（应急）
+  async getVideoList(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
+    if (this.forceV1) return this.getVideoListV1(kolId);
+    return this.getVideoListV2(kolId, limit);
+  }
+
+  // v2 接口：get_author_show_items（便宜，偶尔不稳定）
+  private async getVideoListV2(kolId: string, limit = 20): Promise<{ video: any; videoType: string }[]> {
+    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_show_items', {
+      o_author_id: kolId,
+      limit,
+    });
+    const data = res.data?.data ?? res.data ?? {};
+    const result: { video: any; videoType: string }[] = [];
+    const seen = new Set<string>();
+    if (Array.isArray(data.latest_star_item_info)) {
+      for (const v of data.latest_star_item_info) {
+        const id = String(v.item_id ?? '');
+        if (id && !seen.has(id)) { seen.add(id); result.push({ video: v, videoType: '星图视频' }); }
+      }
+    }
+    return result;
+  }
+
+  // v1 接口：kol_video_performance_v1（稳定但贵，约 v2 的 20 倍价格）
+  private async getVideoListV1(kolId: string): Promise<{ video: any; videoType: string }[]> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_video_performance_v1', {
       kolId,
       onlyAssign: true,
     });
-    // v1 接口嵌套结构：TikHub 外层 data -> 星图原始 data
     const innerData = res.data?.data ?? res.data ?? {};
     const starItems = innerData.latest_star_item_info;
-
     const result: { video: any; videoType: string }[] = [];
     const seen = new Set<string>();
-
     if (Array.isArray(starItems)) {
       for (const v of starItems) {
         const id = String(v.item_id ?? '');
@@ -98,13 +121,40 @@ export class TikHubClient {
     return innerData.price_info ?? res.data?.price_info ?? [];
   }
 
-  // 步骤4：获取博主名片信息（直接用稳定的 v1 接口）
+  // 步骤4：获取博主名片信息（名称、头像、微信、MCN等）
+  // 默认用便宜的 v2 接口；forceV1=true 时走贵的 v1（应急）
   async getAuthorBusinessCard(kolId: string): Promise<{
     nickName: string;
     avatarUri: string;
     wechat: string;
     mcnName: string;
     mcnLogo: string;
+  }> {
+    if (this.forceV1) return this.getAuthorBaseInfoV1(kolId);
+    return this.getAuthorBusinessCardV2(kolId);
+  }
+
+  // v2 名片接口（便宜）
+  private async getAuthorBusinessCardV2(kolId: string): Promise<{
+    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
+  }> {
+    const res = await this.get('/api/v1/douyin/xingtu_v2/get_author_business_card_info', {
+      o_author_id: kolId,
+    });
+    const innerData = res.data?.data ?? res.data ?? {};
+    const card = innerData.card_info ?? innerData;
+    return {
+      nickName: String(card.nick_name ?? ''),
+      avatarUri: String(card.avatar_uri ?? ''),
+      wechat: String(card.wechat ?? ''),
+      mcnName: String(card.mcn_info?.mcn_name ?? card.mcn_name ?? ''),
+      mcnLogo: String(card.mcn_info?.mcn_logo ?? card.mcn_logo ?? ''),
+    };
+  }
+
+  // v1 名片接口 kol_base_info_v1（贵，约 v2 的 20 倍）
+  private async getAuthorBaseInfoV1(kolId: string): Promise<{
+    nickName: string; avatarUri: string; wechat: string; mcnName: string; mcnLogo: string;
   }> {
     const res = await this.get('/api/v1/douyin/xingtu/kol_base_info_v1', {
       kolId,

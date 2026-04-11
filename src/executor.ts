@@ -163,6 +163,7 @@ export async function executeTask(
   config: TaskConfig,
   kv: KVNamespace,
   source: 'cron' | 'manual' = 'manual',
+  forceV1 = false,
 ): Promise<void> {
   // 防重入
   const locked = await acquireLock(kv);
@@ -309,7 +310,7 @@ export async function executeTask(
     let processed = startIndex;
     let errorCount = 0;
     let timedOut = false;
-    const tikhub = new TikHubClient(config.tikHubApiKey);
+    const tikhub = new TikHubClient(config.tikHubApiKey, forceV1);
 
     for (let i = 0; i < pendingEntries.length; i += CONCURRENCY) {
       // 超时检查：接近 13 分钟时停止
@@ -473,6 +474,7 @@ export async function executeTask(
     const targetTableUrl = `https://bytedance.larkoffice.com/base/${config.targetAppToken}?table=${config.targetTableId}`;
     const summaryLines = [
       `触发方式：${triggerLabel}`,
+      `接口模式：${forceV1 ? 'v1（应急/贵）' : 'v2（默认/便宜）'}`,
       `开始时间：${new Date(startTime).toLocaleString('zh-CN', { timeZone: 'Asia/Shanghai' })}`,
       `执行耗时：${durationSec} 秒`,
       `处理博主：${processed}/${bloggerEntries.length} 个`,
