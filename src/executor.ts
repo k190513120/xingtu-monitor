@@ -7,6 +7,7 @@ import {
   extractFieldValue,
   ensureFields,
   updateRecord,
+  searchRecordsByKolIds,
 } from './bitable';
 
 // 每批处理博主数（3 并发，TikHub 峰值 ~9 qps，飞书表写入会串行化）
@@ -367,40 +368,10 @@ export async function executeTask(
       SOURCE_TABLE_EXTRA_FIELDS,
     );
 
-    // ── 读取目标表已有数据，用于 upsert 去重 ──────────────────────────
-    await updateStatus(kv, {
-      state: 'running',
-      message: '正在读取目标表已有数据（用于去重）...',
-      totalCount: bloggerEntries.length,
-      processedCount: startIndex,
-      lastRunAt: startTime,
-    });
-
-    const existingTargetRecords = await fetchAllRecords(
-      config.targetAppToken,
-      config.targetPersonalBaseToken,
-      config.targetTableId,
-      async (loaded: number) => {
-        await updateStatus(kv, {
-          state: 'running',
-          message: `正在读取目标表已有数据（已加载 ${loaded} 条）...`,
-          totalCount: bloggerEntries.length,
-          processedCount: startIndex,
-          lastRunAt: startTime,
-        });
-      },
-    );
-
-    // 构建去重索引：「星图ID_视频ID」→ record_id
-    const existingVideoMap = new Map<string, string>();
-    for (const r of existingTargetRecords) {
-      const kolId = extractFieldValue(r.fields?.['星图ID']);
-      const videoId = extractFieldValue(r.fields?.['视频ID']);
-      if (kolId && videoId) {
-        existingVideoMap.set(`${kolId}_${videoId}`, r.record_id);
-      }
-    }
-    console.log(`[executor] 目标表已有 ${existingVideoMap.size} 条视频记录`);
+    // ── 不再全量读取目标表！每批开始处理前按博主ID用 search 接口按需查询 ──
+    // 改进前：启动阶段读 8569+ 行全表，经常把 Worker CPU 预算跑光导致卡死
+    // 改进后：每批 3 个博主，一次 POST search 只拉回这 3 个博主的几十条记录
+    // 好处：响应体缩小 ~100x，parse 快 ~10x，可扩展到 10 万行目标表
 
     // ── 第二步：并发处理博主（每批处理完立即写入目标表）───────────────────
     let totalCreated = 0;
@@ -422,6 +393,27 @@ export async function executeTask(
       }
 
       const batch = pendingEntries.slice(i, i + CONCURRENCY);
+
+      // ── 本批次去重索引：只查本批涉及博主的已有视频记录 ──
+      // 用 search 接口 + filter 精确拉取，避免读全表
+      const batchKolIds = batch.map(e => e.existingKolId).filter(Boolean);
+      let batchExistingMap = new Map<string, string>();
+      if (batchKolIds.length > 0) {
+        try {
+          const existing = await searchRecordsByKolIds(
+            config.targetAppToken,
+            config.targetPersonalBaseToken,
+            config.targetTableId,
+            batchKolIds,
+          );
+          for (const r of existing) {
+            batchExistingMap.set(`${r.kolId}_${r.videoId}`, r.record_id);
+          }
+        } catch (e: any) {
+          console.error(`[executor] 查询批次去重索引失败:`, e?.message);
+          // 查询失败继续跑，会变成全部 create（可能产生重复，但不阻塞任务）
+        }
+      }
 
       const results = await Promise.allSettled(
         batch.map(entry => {
@@ -491,12 +483,12 @@ export async function executeTask(
           for (const video of videos) {
             const fields = videoRecordToFields(video);
             const dedupKey = `${video.kolId}_${video.videoId}`;
-            const existingRecordId = existingVideoMap.get(dedupKey);
-            if (existingRecordId) {
+            const existingRecordId = batchExistingMap.get(dedupKey);
+            if (existingRecordId && existingRecordId !== '__pending__') {
               batchToUpdate.push({ record_id: existingRecordId, fields });
             } else {
               batchToCreate.push(fields);
-              existingVideoMap.set(dedupKey, '__pending__'); // 防止同批次重复
+              batchExistingMap.set(dedupKey, '__pending__'); // 防止同批次同博主多视频重复
             }
           }
         } else {
@@ -612,7 +604,7 @@ export async function executeTask(
       `失败博主：${errorCount} 个（失败率 ${failureRatePct}%）`,
       `视频新增：${totalCreated} 条`,
       `视频更新：${totalUpdated} 条`,
-      `目标表已有视频：${existingVideoMap.size} 条`,
+      `视频总写入：${totalCreated + totalUpdated} 条`,
       `缓存命中：名片 ${cacheHitCard} / 报价 ${cacheHitPrice}`,
       ``,
       `📋 博主表：${sourceTableUrl}`,

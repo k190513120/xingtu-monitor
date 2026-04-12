@@ -94,6 +94,71 @@ export async function fetchAllRecords(
   return all;
 }
 
+// 按 kolId 列表查询已有记录（用于 per-batch upsert 去重）
+// 只返回 kolId 和 videoId 两个字段，大幅减少响应体 + parse 时间
+// kolIds 一次最多传 50 个（飞书 filter conditions 上限约 50）
+export async function searchRecordsByKolIds(
+  appToken: string,
+  token: string,
+  tableId: string,
+  kolIds: string[],
+): Promise<Array<{ record_id: string; kolId: string; videoId: string }>> {
+  if (kolIds.length === 0) return [];
+
+  const conditions = kolIds.map(kolId => ({
+    field_name: '星图ID',
+    operator: 'is',
+    value: [kolId],
+  }));
+
+  const body = {
+    field_names: ['星图ID', '视频ID'],
+    filter: {
+      conjunction: 'or',
+      conditions,
+    },
+  };
+
+  const all: Array<{ record_id: string; kolId: string; videoId: string }> = [];
+  let pageToken: string | undefined;
+
+  do {
+    const params = new URLSearchParams({ page_size: '500' });
+    if (pageToken) params.set('page_token', pageToken);
+
+    let res: any;
+    let lastErr: any;
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
+        if (attempt > 0) await new Promise(r => setTimeout(r, 500 * attempt));
+        res = await request(
+          'POST',
+          `/open-apis/bitable/v1/apps/${appToken}/tables/${tableId}/records/search?${params}`,
+          token,
+          body,
+        );
+        break;
+      } catch (e) {
+        lastErr = e;
+        console.error(`[bitable] searchRecordsByKolIds 第${attempt + 1}次失败:`, (e as any)?.message);
+      }
+    }
+    if (!res) throw lastErr;
+
+    for (const item of res.data?.items ?? []) {
+      const kolId = extractFieldValue(item.fields?.['星图ID']);
+      const videoId = extractFieldValue(item.fields?.['视频ID']);
+      if (kolId && videoId) {
+        all.push({ record_id: item.record_id, kolId, videoId });
+      }
+    }
+
+    pageToken = res.data?.has_more ? res.data.page_token : undefined;
+  } while (pageToken);
+
+  return all;
+}
+
 // 批量新建记录，每批最多 500 条（API 限制）
 export async function batchCreateRecords(
   appToken: string,
